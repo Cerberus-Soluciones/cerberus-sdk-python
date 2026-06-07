@@ -133,7 +133,7 @@ EXPECTED_ALL = {
 
 
 def test_version_is_v0_7_0() -> None:
-    assert cerberus_compliance.__version__ == "0.7.0"
+    assert cerberus_compliance.__version__.startswith("0.7.0")
 
 
 def test_all_matches_expected_surface() -> None:

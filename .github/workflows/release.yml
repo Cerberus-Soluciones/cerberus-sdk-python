@@ -104,8 +104,8 @@ jobs:
       - name: Smoke — import + kyb.get against prod
         env:
           # Staging deprecated (2026-06-07): canary smoke now targets prod.
-          # The CERBERUS_STAGING_KEY repo secret holds a prod-valid key.
-          CERBERUS_API_KEY: ${{ secrets.CERBERUS_STAGING_KEY }}
+          # The CERBERUS_API_KEY repo secret holds a prod-valid key.
+          CERBERUS_API_KEY: ${{ secrets.CERBERUS_API_KEY }}
         run: |
           python - <<'PY'
           import os

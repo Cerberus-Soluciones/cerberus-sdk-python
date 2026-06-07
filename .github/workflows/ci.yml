@@ -85,10 +85,10 @@ jobs:
       - name: Smoke against prod
         env:
           # Staging deprecated (2026-06-07): the integration suite now targets
-          # prod (compliance.cerberus.cl). The CERBERUS_STAGING_KEY repo secret
+          # prod (compliance.cerberus.cl). The CERBERUS_API_KEY repo secret
           # holds a prod-valid key; it is mapped to the CERBERUS_API_KEY env the
           # tests read.
-          CERBERUS_API_KEY: ${{ secrets.CERBERUS_STAGING_KEY }}
+          CERBERUS_API_KEY: ${{ secrets.CERBERUS_API_KEY }}
         # --no-cov disables the 95% coverage gate from pyproject.toml addopts:
         # integration tests only exercise live-API paths (~64% cov); the gate
         # is enforced by the unit-test matrix above, not by this smoke job.
