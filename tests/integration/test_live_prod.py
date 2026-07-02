@@ -262,6 +262,35 @@ class TestProdIndicadores:
         with pytest.raises((NotFoundError, CerberusAPIError)):
             live_client.indicadores.get("UF")
 
+    def test_list_catalog_returns_tracked_series(self, live_client: CerberusClient) -> None:
+        """``GET /indicadores`` catalog rows carry the series_id in ``name``.
+
+        The tracked catalog is small but never empty in prod; each row's
+        ``name`` is the canonical ``series_id`` handle.
+        """
+        try:
+            rows = live_client.indicadores.list()
+        except CerberusAPIError:
+            pytest.xfail("prod indicadores catalog not available")
+        assert isinstance(rows, list)
+        if rows:
+            assert "name" in rows[0]
+            assert "title_es" in rows[0]
+
+    def test_compare_two_series(self, live_client: CerberusClient) -> None:
+        """``GET /indicadores/compare`` round-trip with two series_ids."""
+        try:
+            series = live_client.indicadores.compare(
+                [UF_SERIES_ID, "F073.TCO.PRE.Z.D"],
+                from_="2026-04-01",
+                to="2026-04-30",
+            )
+        except (NotFoundError, CerberusAPIError):
+            pytest.xfail("prod indicadores compare not populated for the range")
+        assert isinstance(series, list)
+        if series:
+            assert {s["name"] for s in series} <= {UF_SERIES_ID, "F073.TCO.PRE.Z.D"}
+
 
 # ---------------------------------------------------------------------------
 # Persons

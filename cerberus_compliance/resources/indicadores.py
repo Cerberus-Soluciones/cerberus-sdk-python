@@ -32,6 +32,7 @@ Example
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date as _date
 from typing import Any
 from urllib.parse import quote
@@ -55,32 +56,83 @@ def _clean_params(raw: dict[str, Any]) -> dict[str, Any] | None:
     return cleaned or None
 
 
-def _validate_history_range(from_: str, to: str) -> tuple[str, str]:
+def _validate_history_range(
+    from_: str, to: str, *, context: str = "indicadores.history"
+) -> tuple[str, str]:
     """Validate the ``YYYY-MM-DD`` range inputs and return them verbatim.
 
     The live API accepts ``?from=YYYY-MM-DD&to=YYYY-MM-DD`` query params
-    on ``/v1/indicadores/{series_id}``. We delegate calendar validation to
+    on ``/v1/indicadores/{series_id}`` (and ``/v1/indicadores/compare``).
+    We delegate calendar validation to
     :meth:`datetime.date.fromisoformat` (cheap, stdlib, rejects
     ``"2026-13-01"`` and ``"2026-02-30"`` correctly) and let the server
     own the cross-field checks (``from <= to``, ≤ 365-day window).
 
     Returns the inputs unchanged so callers can forward them directly
     to ``params=``. Strings are kept as strings so the wire encoding is
-    identical to what the user passed.
+    identical to what the user passed. ``context`` labels the raising
+    SDK method in the error message.
 
     Raises :class:`ValueError` when either input is not a parseable
     ``YYYY-MM-DD`` ISO date.
     """
     for label, value in (("from_", from_), ("to", to)):
         if not isinstance(value, str):
-            raise ValueError(f"indicadores.history: {label} must be 'YYYY-MM-DD', got {value!r}")
+            raise ValueError(f"{context}: {label} must be 'YYYY-MM-DD', got {value!r}")
         try:
             _date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError(
-                f"indicadores.history: {label} must be 'YYYY-MM-DD', got {value!r}"
-            ) from exc
+            raise ValueError(f"{context}: {label} must be 'YYYY-MM-DD', got {value!r}") from exc
     return from_, to
+
+
+def _validate_compare_inputs(series_ids: Sequence[str], from_: str, to: str) -> dict[str, str]:
+    """Build the validated query params for ``GET /indicadores/compare``.
+
+    ``series_ids`` must be a real sequence of ``series_id`` strings — a
+    bare ``str`` is rejected because comma-joining it would silently
+    explode into one-character "ids" on the wire. Cardinality (2 to 6
+    series) is enforced server-side (422 → :class:`ValidationError`)
+    so this guard stays minimal and forward-compatible.
+    """
+    if isinstance(series_ids, str):
+        raise ValueError(
+            "indicadores.compare: series_ids must be a sequence of series_id "
+            f"strings (e.g. ['F073.UFF.PRE.Z.D', ...]), got the bare string {series_ids!r}"
+        )
+    validated_from, validated_to = _validate_history_range(from_, to, context="indicadores.compare")
+    return {
+        "names": ",".join(series_ids),
+        "from": validated_from,
+        "to": validated_to,
+    }
+
+
+def _extract_compare_series(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull the per-indicator series list out of a compare envelope.
+
+    The live ``/v1/indicadores/compare`` response shape is::
+
+        {
+            "series": [
+                {
+                    "name": "F073.UFF.PRE.Z.D",
+                    "title_es": "Unidad de fomento (UF)",
+                    "source": "bcentral_api",
+                    "items": [{"date": "2026-05-01", "value": "40133.5"}, ...]
+                },
+                ...
+            ]
+        }
+
+    Returns the ``series`` array unwrapped for ergonomics. Defensive:
+    ``series: null`` or a missing key yields an empty list, matching
+    the :func:`_extract_history_items` convention.
+    """
+    series = body.get("series")
+    if not isinstance(series, list):
+        return []
+    return [s for s in series if isinstance(s, dict)]
 
 
 def _extract_history_items(body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -113,6 +165,40 @@ class IndicadoresResource(BaseResource):
     """Sync accessor for the ``/indicadores`` endpoint family."""
 
     _path_prefix = "/indicadores"
+
+    def compare(self, series_ids: Sequence[str], *, from_: str, to: str) -> list[dict[str, Any]]:
+        """Compare 2-6 indicator series over a shared date range.
+
+        Wraps ``GET /v1/indicadores/compare?names=a,b&from=…&to=…`` —
+        the ``series_id`` handles travel comma-joined in the ``names``
+        query param (the live wire name; the values are BCCh
+        ``series_id`` codes, case-sensitive).
+
+        Args:
+            series_ids: Sequence of 2 to 6 ``series_id`` strings (e.g.
+                ``["F073.UFF.PRE.Z.D", "F073.TCO.PRE.Z.D"]``). A bare
+                ``str`` is rejected client-side; cardinality is
+                validated server-side (422).
+            from_: ``YYYY-MM-DD`` start date (inclusive).
+            to: ``YYYY-MM-DD`` end date (inclusive).
+
+        Returns:
+            The ``series`` array from the server envelope, unwrapped
+            for ergonomics — one element per requested indicator:
+            ``{"name", "title_es", "source", "items": [{"date",
+            "value"}, ...]}``. ``value`` is an exact-precision string,
+            never ``float``.
+
+        Raises:
+            ValueError: ``series_ids`` is a bare string, or either
+                date is not ``YYYY-MM-DD``.
+            ValidationError: The server rejected the request (fewer
+                than 2 / more than 6 series, ``from > to``, …).
+            NotFoundError: An unknown ``series_id`` in the set.
+        """
+        params = _validate_compare_inputs(series_ids, from_, to)
+        body = self._client._request("GET", f"{self._path_prefix}/compare", params=params)
+        return _extract_compare_series(body)
 
     def get(self, series_id: str, date: str | None = None) -> dict[str, Any]:
         """Fetch the indicator value for a specific date.
@@ -277,11 +363,43 @@ class IndicadoresResource(BaseResource):
         body = self._client._request("GET", path, params=params)
         return self._extract_items(body)
 
+    # NOTE: ``list`` is deliberately the LAST method of the class — once
+    # defined, the name shadows the ``list`` builtin for every later
+    # annotation in this class body under mypy --strict.
+    def list(self) -> list[dict[str, Any]]:
+        """List the catalog of featured (``tracked``) macro indicators.
+
+        Wraps ``GET /v1/indicadores`` — one item per tracked series in
+        the server catalog, each carrying coverage metadata. The
+        endpoint takes no parameters (the featured catalog is small);
+        use :meth:`buscar` to search the full ~25k-series BCCh
+        catalogue.
+
+        Returns:
+            The list of catalog items, unwrapped from the server
+            envelope for ergonomics — each element is
+            ``{"name", "title_es", "source", "frequency", "min_date",
+            "max_date", "latest_value", "latest_date", "has_forecast"}``.
+            ``name`` is the canonical ``series_id``; ``latest_value`` is
+            an exact-precision string (never ``float``). Pass ``name``
+            to :meth:`get` / :meth:`history` / :meth:`forecast`.
+        """
+        body = self._client._request("GET", self._path_prefix)
+        return self._extract_items(body)
+
 
 class AsyncIndicadoresResource(AsyncBaseResource):
     """Async mirror of :class:`IndicadoresResource`."""
 
     _path_prefix = "/indicadores"
+
+    async def compare(
+        self, series_ids: Sequence[str], *, from_: str, to: str
+    ) -> list[dict[str, Any]]:
+        """Async variant of :meth:`IndicadoresResource.compare`."""
+        params = _validate_compare_inputs(series_ids, from_, to)
+        body = await self._client._request("GET", f"{self._path_prefix}/compare", params=params)
+        return _extract_compare_series(body)
 
     async def get(self, series_id: str, date: str | None = None) -> dict[str, Any]:
         """Async variant of :meth:`IndicadoresResource.get`."""
@@ -319,4 +437,12 @@ class AsyncIndicadoresResource(AsyncBaseResource):
             {"q": q, "frequency": frequency, "family": family, "limit": limit, "offset": offset}
         )
         body = await self._client._request("GET", path, params=params)
+        return self._extract_items(body)
+
+    # NOTE: ``list`` is deliberately the LAST method of the class — once
+    # defined, the name shadows the ``list`` builtin for every later
+    # annotation in this class body under mypy --strict.
+    async def list(self) -> list[dict[str, Any]]:
+        """Async variant of :meth:`IndicadoresResource.list`."""
+        body = await self._client._request("GET", self._path_prefix)
         return self._extract_items(body)

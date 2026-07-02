@@ -41,6 +41,16 @@ the backend's `/v1/lei` router.
   `get` / `history` / `forecast`.
 - Indicador responses now expose **`title_es`**, the human-readable Spanish
   label for the series.
+- **`client.indicadores.list()`** — the featured (`tracked`) macro-indicator
+  catalog (`GET /indicadores`): one row per tracked series with coverage
+  metadata (`name` — the canonical `series_id` —, `title_es`, `source`,
+  `frequency`, `min_date`, `max_date`, `latest_value`, `latest_date`,
+  `has_forecast`).
+- **`client.indicadores.compare(series_ids, *, from_, to)`** — multi-series
+  comparison (`GET /indicadores/compare`): 2 to 6 `series_id` handles over a
+  shared `YYYY-MM-DD` range, returning one `{name, title_es, source, items}`
+  series per indicator. A bare `str` for `series_ids` is rejected client-side
+  (it would comma-join char by char); cardinality is validated server-side.
 - **`client.lei`** — GLEIF LEI registry over `cmf_lei_records`: `list`
   (filters `jurisdiction`, `registration_status`, `rut`; `limit`/`offset`),
   `get(lei)` (case-insensitive 20-char code; 404 when absent) and `iter_all`.

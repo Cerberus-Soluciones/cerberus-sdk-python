@@ -17,6 +17,8 @@ the ``IndicadorSeries`` schema).
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 import httpx
 import pytest
 import respx
@@ -620,6 +622,228 @@ class TestIndicadoresBuscar:
                 "has_forecast": True,
             }
         ]
+
+
+class TestIndicadoresList:
+    def test_list_unwraps_items_envelope(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get("/indicadores").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "name": "F073.UFF.PRE.Z.D",
+                            "title_es": "Unidad de fomento (UF)",
+                            "source": "bcentral_api",
+                            "frequency": "daily",
+                            "min_date": "1977-01-01",
+                            "max_date": "2026-06-26",
+                            "latest_value": "40133.5",
+                            "latest_date": "2026-06-26",
+                            "has_forecast": True,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        results = resource.list()
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert results[0]["name"] == "F073.UFF.PRE.Z.D"
+        assert results[0]["has_forecast"] is True
+        assert route.called
+        # The catalog endpoint takes no query params — none must be sent.
+        assert not dict(route.calls.last.request.url.params)
+
+    def test_list_empty_catalog_returns_empty_list(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get("/indicadores").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        resource = IndicadoresResource(sync_client)
+        assert resource.list() == []
+
+
+class TestIndicadoresCompare:
+    _COMPARE_BODY: ClassVar[dict[str, Any]] = {
+        "series": [
+            {
+                "name": "F073.UFF.PRE.Z.D",
+                "source": "bcentral_api",
+                "title_es": "Unidad de fomento (UF)",
+                "items": [{"date": "2026-05-01", "value": "40133.5"}],
+            },
+            {
+                "name": "F074.IPC.IND.Z.2023.C.M",
+                "source": "bcentral_api",
+                "title_es": "IPC",
+                "items": [{"date": "2026-05-01", "value": "104.5"}],
+            },
+        ]
+    }
+
+    def test_compare_joins_series_ids_and_forwards_range(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get(
+            "/indicadores/compare",
+            params={
+                "names": "F073.UFF.PRE.Z.D,F074.IPC.IND.Z.2023.C.M",
+                "from": "2026-05-01",
+                "to": "2026-06-01",
+            },
+        ).mock(return_value=httpx.Response(200, json=self._COMPARE_BODY))
+        resource = IndicadoresResource(sync_client)
+        series = resource.compare(
+            ["F073.UFF.PRE.Z.D", "F074.IPC.IND.Z.2023.C.M"],
+            from_="2026-05-01",
+            to="2026-06-01",
+        )
+        assert [s["name"] for s in series] == [
+            "F073.UFF.PRE.Z.D",
+            "F074.IPC.IND.Z.2023.C.M",
+        ]
+        assert series[0]["items"] == [{"date": "2026-05-01", "value": "40133.5"}]
+        assert route.called
+
+    def test_compare_rejects_bare_string_series_ids(self, sync_client: CerberusClient) -> None:
+        """A bare ``str`` would be comma-joined char by char — hard error."""
+        resource = IndicadoresResource(sync_client)
+        with pytest.raises(ValueError, match="sequence of series_id strings"):
+            resource.compare(
+                "F073.UFF.PRE.Z.D",  # type: ignore[arg-type]
+                from_="2026-05-01",
+                to="2026-06-01",
+            )
+
+    def test_compare_rejects_non_iso_dates(self, sync_client: CerberusClient) -> None:
+        resource = IndicadoresResource(sync_client)
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            resource.compare(
+                ["F073.UFF.PRE.Z.D", "F074.IPC.IND.Z.2023.C.M"],
+                from_="2026/05/01",
+                to="2026-06-01",
+            )
+
+    def test_compare_422_raises_validation_error(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """Cardinality (2-6 series) is enforced server-side → 422."""
+        respx_mock.get(
+            "/indicadores/compare",
+            params={"names": "F073.UFF.PRE.Z.D", "from": "2026-05-01", "to": "2026-06-01"},
+        ).mock(
+            return_value=httpx.Response(
+                422,
+                json={
+                    "type": "about:blank",
+                    "title": "Validation error",
+                    "status": 422,
+                    "detail": "Provide between 2 and 6 comma-separated indicator names.",
+                },
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        with pytest.raises(ValidationError):
+            resource.compare(["F073.UFF.PRE.Z.D"], from_="2026-05-01", to="2026-06-01")
+
+    def test_compare_malformed_series_defensively_returns_empty(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """Defensive: ``series: null`` (or missing) must not raise."""
+        respx_mock.get(
+            "/indicadores/compare",
+            params={
+                "names": "F073.UFF.PRE.Z.D,F074.IPC.IND.Z.2023.C.M",
+                "from": "2026-05-01",
+                "to": "2026-06-01",
+            },
+        ).mock(return_value=httpx.Response(200, json={"series": None}))
+        resource = IndicadoresResource(sync_client)
+        assert (
+            resource.compare(
+                ["F073.UFF.PRE.Z.D", "F074.IPC.IND.Z.2023.C.M"],
+                from_="2026-05-01",
+                to="2026-06-01",
+            )
+            == []
+        )
+
+
+class TestIndicadoresListCompareAsync:
+    async def test_list(
+        self, async_client: AsyncCerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get("/indicadores").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "name": "F073.UFF.PRE.Z.D",
+                            "title_es": "Unidad de fomento (UF)",
+                            "source": "bcentral_api",
+                            "frequency": "daily",
+                            "has_forecast": True,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        )
+        resource = AsyncIndicadoresResource(async_client)
+        results = await resource.list()
+        assert len(results) == 1
+        assert results[0]["name"] == "F073.UFF.PRE.Z.D"
+        assert route.called
+
+    async def test_compare(
+        self, async_client: AsyncCerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get(
+            "/indicadores/compare",
+            params={
+                "names": "F073.UFF.PRE.Z.D,F074.IPC.IND.Z.2023.C.M",
+                "from": "2026-05-01",
+                "to": "2026-06-01",
+            },
+        ).mock(return_value=httpx.Response(200, json=TestIndicadoresCompare._COMPARE_BODY))
+        resource = AsyncIndicadoresResource(async_client)
+        series = await resource.compare(
+            ["F073.UFF.PRE.Z.D", "F074.IPC.IND.Z.2023.C.M"],
+            from_="2026-05-01",
+            to="2026-06-01",
+        )
+        assert [s["name"] for s in series] == [
+            "F073.UFF.PRE.Z.D",
+            "F074.IPC.IND.Z.2023.C.M",
+        ]
+        assert route.called
+
+    async def test_compare_rejects_bare_string_series_ids(
+        self, async_client: AsyncCerberusClient
+    ) -> None:
+        resource = AsyncIndicadoresResource(async_client)
+        with pytest.raises(ValueError, match="sequence of series_id strings"):
+            await resource.compare(
+                "F073.UFF.PRE.Z.D",  # type: ignore[arg-type]
+                from_="2026-05-01",
+                to="2026-06-01",
+            )
+
+    async def test_compare_rejects_non_iso_dates(self, async_client: AsyncCerberusClient) -> None:
+        resource = AsyncIndicadoresResource(async_client)
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            await resource.compare(
+                ["F073.UFF.PRE.Z.D", "F074.IPC.IND.Z.2023.C.M"],
+                from_="2026-05-01",
+                to="bad",
+            )
 
 
 class TestIndicadoresBuscarAsync:
