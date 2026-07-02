@@ -111,12 +111,16 @@ RESOURCE_COVERAGE: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/normativa/{regulation_id}/mercado"): ("normativa", "mercado"),
     # /normativa-consulta (P5.2 G9 — early-warning regulatory consultations)
     ("GET", "/normativa-consulta"): ("normativa_consulta", "list"),
-    # /indicadores (P5.2 G8 — CMF Indicadores API v3 proxy: UF/UTM/USD/EUR/IPC/TMC).
-    # The server exposes a single ``{name}`` path template for both the
-    # single-date lookup (``?date=``) and the historical range
-    # (``?periodo=``); the SDK splits that into ``get()`` + ``history()``
-    # but both land on the same OpenAPI entry.
-    ("GET", "/indicadores/{name}"): ("indicadores", "get"),
+    # /indicadores (P5.2 G8 → series_id-canonical since 0.8.0 — BCCh ~25k
+    # series proxy). The canonical handle is the BCCh ``series_id`` (e.g.
+    # ``F073.UFF.PRE.Z.D``); friendly names (``UF``, ``IPC``, …) are retired
+    # and 404 in prod. The server exposes a single ``{series_id}`` path
+    # template for both the single-date lookup (``?date=``) and the
+    # historical range (``?from=&to=``); the SDK splits that into ``get()``
+    # + ``history()`` but both land on the same OpenAPI entry. Discovery is
+    # ``GET /indicadores/buscar``.
+    ("GET", "/indicadores/{series_id}"): ("indicadores", "get"),
+    ("GET", "/indicadores/buscar"): ("indicadores", "buscar"),
     # v0.4.0 — P5.3 nine new resources + universal semantic search.
     # Per-id ``GET /{resource}/{id}`` endpoints are NOT exposed in prod; the
     # corresponding ``ResourcesResource.get`` SDK methods raise
@@ -183,7 +187,7 @@ RESOURCE_COVERAGE: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/hechos/event-types"): ("hechos", "hechos_event_type_distribution"),
     ("GET", "/hechos/bancos"): ("hechos", "list_hechos_bancos"),
     ("GET", "/hechos/otros"): ("hechos", "list_hechos_otros"),
-    ("GET", "/indicadores/{name}/forecast"): ("indicadores", "forecast"),
+    ("GET", "/indicadores/{series_id}/forecast"): ("indicadores", "forecast"),
     ("GET", "/insider/{rut_or_persona}/profile"): ("insider", "get_profile"),
     ("GET", "/ipsa/risk-panel"): ("ipsa", "risk_panel"),
     ("GET", "/ipsa/{ticker}/risk"): ("ipsa", "ticker_risk"),
