@@ -1,7 +1,8 @@
 """TDD tests for ``cerberus_compliance.resources.indicadores`` (P5.2 G8).
 
-The ``IndicadoresResource`` wraps ``/indicadores/{name}`` with two public
-affordances:
+The ``IndicadoresResource`` wraps ``/indicadores/{series_id}`` (the
+canonical handle is the dotted BCCh ``series_id``, e.g.
+``F073.UFF.PRE.Z.D``) with two public affordances:
 
 * :meth:`IndicadoresResource.get` — single-date lookup (no ``date`` arg
   means "latest").
@@ -63,24 +64,53 @@ class TestIndicadoresGet:
     def test_get_latest_no_date_param(
         self, sync_client: CerberusClient, respx_mock: respx.MockRouter
     ) -> None:
-        route = respx_mock.get("/indicadores/UF").mock(
+        route = respx_mock.get("/indicadores/F073.UFF.PRE.Z.D").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "name": "UF",
+                    "name": "F073.UFF.PRE.Z.D",
                     "date": "2026-04-24",
                     "value": "39421.73",
-                    "currency": "CLP",
+                    "source": "bcentral_api",
+                    "title_es": "Unidad de fomento (UF)",
                 },
             )
         )
         resource = IndicadoresResource(sync_client)
-        result = resource.get("UF")
+        result = resource.get("F073.UFF.PRE.Z.D")
         assert result["value"] == "39421.73"
+        assert result["title_es"] == "Unidad de fomento (UF)"
         assert route.called
         # No ``date`` query param should have been forwarded.
         request = route.calls.last.request
         assert "date" not in request.url.params
+
+    def test_get_dotted_series_id_path_not_mangled(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """Dotted BCCh ``series_id`` travels verbatim in the URL path.
+
+        ``urllib.parse.quote`` never percent-encodes ``.`` (unreserved),
+        so ``F073.UFF.PRE.Z.D`` must reach the server literally — this is
+        the canonical-handle contract (series_id in, ``title_es`` out).
+        """
+        route = respx_mock.get("/indicadores/F073.UFF.PRE.Z.D").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "series_id": "F073.UFF.PRE.Z.D",
+                    "title_es": "Unidad de fomento (UF)",
+                    "value": "39421.73",
+                },
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        result = resource.get("F073.UFF.PRE.Z.D")
+        assert route.called
+        assert result["series_id"] == "F073.UFF.PRE.Z.D"
+        assert result["title_es"]
+        # The dots must NOT be percent-encoded on the wire.
+        assert route.calls.last.request.url.path.endswith("/indicadores/F073.UFF.PRE.Z.D")
 
     def test_get_with_date_param(
         self, sync_client: CerberusClient, respx_mock: respx.MockRouter
@@ -241,8 +271,9 @@ class TestIndicadoresHistory:
 
 
 _FORECAST_BODY = {
-    "name": "UF",
-    "source": "cmf_api_sbifv3",
+    "name": "F073.UFF.PRE.Z.D",
+    "title_es": "Unidad de fomento (UF)",
+    "source": "bcentral_api",
     "model": "timesfm-1.0-200m",
     "horizon": 6,
     "context_points": 1024,
