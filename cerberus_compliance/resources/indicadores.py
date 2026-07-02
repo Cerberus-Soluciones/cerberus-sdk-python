@@ -274,6 +274,48 @@ class IndicadoresResource(BaseResource):
         params = _clean_params({"horizon": horizon})
         return self._client._request("GET", path, params=params)
 
+    def buscar(
+        self,
+        *,
+        q: str | None = None,
+        frequency: str | None = None,
+        family: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Discover series over the ~25k-series BCCh catalogue.
+
+        Wraps ``GET /v1/indicadores/buscar`` — the discovery surface for
+        the Banco Central de Chile statistical database cached
+        server-side. Macro-only data; no PII travels on this endpoint.
+
+        Args:
+            q: Keyword filter, matched ``ilike`` against ``title_es`` /
+                ``title_en``.
+            frequency: One of ``DAILY`` / ``MONTHLY`` / ``QUARTERLY`` /
+                ``ANNUAL``.
+            family: First segment of the ``series_id`` (e.g. ``F019``).
+            limit: Page size (server default applies when omitted).
+            offset: Pagination offset.
+
+        All parameters are keyword-only and optional — searching by
+        frequency/family alone (no ``q``) is valid.
+
+        Returns:
+            The list of matching items, unwrapped from the server
+            envelope for ergonomics — each element is
+            ``{"series_id", "title_es", "frequency", "source",
+            "tracked", "has_forecast"}``. The server ranks ``tracked``
+            series first. Pass a resulting ``series_id`` to
+            :meth:`get` / :meth:`forecast`.
+        """
+        path = f"{self._path_prefix}/buscar"
+        params = _clean_params(
+            {"q": q, "frequency": frequency, "family": family, "limit": limit, "offset": offset}
+        )
+        body = self._client._request("GET", path, params=params)
+        return self._extract_items(body)
+
 
 class AsyncIndicadoresResource(AsyncBaseResource):
     """Async mirror of :class:`IndicadoresResource`."""
@@ -300,3 +342,20 @@ class AsyncIndicadoresResource(AsyncBaseResource):
         path = f"{self._path_prefix}/{quote(series_id, safe='')}/forecast"
         params = _clean_params({"horizon": horizon})
         return await self._client._request("GET", path, params=params)
+
+    async def buscar(
+        self,
+        *,
+        q: str | None = None,
+        frequency: str | None = None,
+        family: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Async variant of :meth:`IndicadoresResource.buscar`."""
+        path = f"{self._path_prefix}/buscar"
+        params = _clean_params(
+            {"q": q, "frequency": frequency, "family": family, "limit": limit, "offset": offset}
+        )
+        body = await self._client._request("GET", path, params=params)
+        return self._extract_items(body)

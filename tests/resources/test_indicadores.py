@@ -498,6 +498,187 @@ class TestIndicadoresAsync:
 
 
 # ---------------------------------------------------------------------------
+# Sync: IndicadoresResource.buscar (discovery over ~25k BCCh series)
+# ---------------------------------------------------------------------------
+
+
+class TestIndicadoresBuscar:
+    def test_buscar_forwards_all_filter_params(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get(
+            "/indicadores/buscar",
+            params={
+                "q": "cobre",
+                "frequency": "MONTHLY",
+                "family": "F019",
+                "limit": "20",
+                "offset": "0",
+            },
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "series_id": "F019.PPB.PRE.40.M",
+                            "title_es": "Precio del cobre refinado BML (dólares/libra)",
+                            "frequency": "MONTHLY",
+                            "source": "bcentral_api",
+                            "tracked": True,
+                            "has_forecast": True,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        results = resource.buscar(q="cobre", frequency="MONTHLY", family="F019", limit=20, offset=0)
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert results[0]["series_id"] == "F019.PPB.PRE.40.M"
+        assert results[0]["title_es"]
+        assert route.called
+
+    def test_buscar_no_params_omits_query_string(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """``buscar()`` with no args collapses ``params`` to ``None``."""
+        route = respx_mock.get("/indicadores/buscar").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        resource = IndicadoresResource(sync_client)
+        resource.buscar()
+        assert route.called
+        request = route.calls.last.request
+        for param in ("q", "frequency", "family", "limit", "offset"):
+            assert param not in request.url.params
+
+    def test_buscar_unwraps_data_envelope(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """A ``{"data": [...]}`` envelope (SDK-documented shape) unwraps too."""
+        respx_mock.get("/indicadores/buscar", params={"q": "uf"}).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "series_id": "F073.UFF.PRE.Z.D",
+                            "title_es": "Unidad de fomento (UF)",
+                            "frequency": "DAILY",
+                            "source": "bcentral_api",
+                            "tracked": True,
+                            "has_forecast": True,
+                        }
+                    ]
+                },
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        results = resource.buscar(q="uf")
+        assert len(results) == 1
+        assert results[0]["series_id"] == "F073.UFF.PRE.Z.D"
+
+    def test_buscar_empty_returns_empty_list(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get("/indicadores/buscar", params={"q": "nomatch"}).mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        resource = IndicadoresResource(sync_client)
+        assert resource.buscar(q="nomatch") == []
+
+    def test_buscar_bare_list_response(
+        self, sync_client: CerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        """A bare top-level JSON array is wrapped by ``_request`` as
+        ``{"data": [...]}`` and unwrapped again by ``_extract_items``.
+        """
+        respx_mock.get("/indicadores/buscar", params={"family": "F073"}).mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "series_id": "F073.UFF.PRE.Z.D",
+                        "title_es": "Unidad de fomento (UF)",
+                        "frequency": "DAILY",
+                        "source": "bcentral_api",
+                        "tracked": True,
+                        "has_forecast": True,
+                    }
+                ],
+            )
+        )
+        resource = IndicadoresResource(sync_client)
+        results = resource.buscar(family="F073")
+        assert results == [
+            {
+                "series_id": "F073.UFF.PRE.Z.D",
+                "title_es": "Unidad de fomento (UF)",
+                "frequency": "DAILY",
+                "source": "bcentral_api",
+                "tracked": True,
+                "has_forecast": True,
+            }
+        ]
+
+
+class TestIndicadoresBuscarAsync:
+    async def test_buscar_forwards_all_filter_params(
+        self, async_client: AsyncCerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get(
+            "/indicadores/buscar",
+            params={
+                "q": "cobre",
+                "frequency": "MONTHLY",
+                "family": "F019",
+                "limit": "20",
+                "offset": "0",
+            },
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "series_id": "F019.PPB.PRE.40.M",
+                            "title_es": "Precio del cobre refinado BML (dólares/libra)",
+                            "frequency": "MONTHLY",
+                            "source": "bcentral_api",
+                            "tracked": True,
+                            "has_forecast": True,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        )
+        resource = AsyncIndicadoresResource(async_client)
+        results = await resource.buscar(
+            q="cobre", frequency="MONTHLY", family="F019", limit=20, offset=0
+        )
+        assert len(results) == 1
+        assert results[0]["series_id"] == "F019.PPB.PRE.40.M"
+        assert route.called
+
+    async def test_buscar_no_params_omits_query_string(
+        self, async_client: AsyncCerberusClient, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get("/indicadores/buscar").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        resource = AsyncIndicadoresResource(async_client)
+        assert await resource.buscar() == []
+        assert route.called
+        request = route.calls.last.request
+        for param in ("q", "frequency", "family", "limit", "offset"):
+            assert param not in request.url.params
+
+
+# ---------------------------------------------------------------------------
 # Literal-type expansion: BCentral series + IndicatorName union (P5.5)
 # ---------------------------------------------------------------------------
 
